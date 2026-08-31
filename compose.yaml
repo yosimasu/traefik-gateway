@@ -75,22 +75,20 @@ services:
     networks:
       - traefik-gateway-net
 
-  # Watches Docker and auto-attaches any traefik.enable=true container to the
-  # traefik-gateway-net network, so Traefik can reach it by container name without any
-  # edit to the workspace's compose networks.
+  # Admission controller: auto-attaches any traefik.enable=true container to the
+  # traefik-gateway-net network (so Traefik reaches it by name without the
+  # workspace editing its compose networks), but enforces at-most-one exporter
+  # per DB entrypoint (postgres/mysql/redis/mongodb) with reject-extras — see
+  # ./netconnect/admission.sh. Inspect current state with `make check`.
   netconnect:
     image: docker:cli
     restart: unless-stopped
     entrypoint: sh
     command:
-      - -c
-      - |
-        connect() { docker network connect traefik-gateway-net "$$1" 2>/dev/null || true; }
-        docker ps --filter label=traefik.enable=true -q | while read id; do connect "$$id"; done
-        docker events --filter event=start --filter label=traefik.enable=true \
-          --format '{{.Actor.Attributes.name}}' | while read n; do connect "$$n"; done
+      - /netconnect/admission.sh
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./netconnect:/netconnect:ro
     networks:
       - traefik-gateway-net
 

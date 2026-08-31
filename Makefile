@@ -6,6 +6,7 @@
 #   make down      # stop it
 #   make restart   # apply config changes (recreates the traefik container)
 #   make logs      # follow logs (watch the netconnect sidecar attach containers)
+#   make check     # show which container exports each DB entrypoint (+ conflicts)
 #   make clean     # remove the generated certs (keeps the trusted CA)
 
 COMPOSE := docker compose
@@ -13,7 +14,7 @@ NETWORK := traefik-gateway-net
 CERT    := certs/lvh.me.pem
 KEY     := certs/lvh.me-key.pem
 
-.PHONY: check-docker check-mkcert init net cert up down restart logs clean
+.PHONY: check-docker check-mkcert init net cert up down restart logs check clean
 
 # Preflight: refuse to run until the required tools are installed, with a hint.
 check-docker:
@@ -61,6 +62,12 @@ restart: net
 
 logs: check-docker
 	$(COMPOSE) logs -f
+
+# Report which container currently exports each DB entrypoint (and any conflict).
+check: check-docker
+	@cid=$$($(COMPOSE) ps -q netconnect 2>/dev/null); \
+	if [ -n "$$cid" ]; then docker exec "$$cid" sh /netconnect/admission.sh check; \
+	else echo "netconnect 未運行，先 make up"; fi
 
 clean:
 	rm -f certs/*.pem
