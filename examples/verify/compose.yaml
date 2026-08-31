@@ -1,0 +1,57 @@
+# Verification stack for the local Traefik gateway.
+#
+# Standalone — it declares NO gateway network. The netconnect sidecar
+# auto-attaches every traefik.enable=true container to traefik-gateway-net, so
+# bringing this up (with the gateway already running via `make up`) exercises
+# two things end to end:
+#
+#   1. HTTPS host routing   -> https://demo.lvh.me  reaches demo-web
+#   2. reject-extras         -> pg-extra is refused because pg-primary already
+#                               holds the `postgres` TCP entrypoint
+#
+# Run from this directory:
+#   docker compose up -d
+#   # ...verify (see README.md)...
+#   docker compose down
+services:
+  # (1) Web service — proves Host-based HTTPS routing for any *.lvh.me name.
+  #     whoami echoes the request so you can see it arrived through Traefik.
+  demo-web:
+    image: traefik/whoami
+    container_name: demo-web
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.demoweb.rule=Host(`demo.lvh.me`)
+      - traefik.http.routers.demoweb.entrypoints=websecure
+      - traefik.http.routers.demoweb.tls=true
+      - traefik.http.services.demoweb.loadbalancer.server.port=80
+
+  # (2a) Incumbent DB — claims the `postgres` entrypoint first and wins it.
+  pg-primary:
+    image: postgres:16-alpine
+    container_name: pg-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust   # demo only: no password, do not copy to prod
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.pgprimary.entrypoints=postgres
+      - traefik.tcp.routers.pgprimary.rule=HostSNI(`*`)
+      - traefik.tcp.services.pgprimary.loadbalancer.server.port=5432
+
+  # (2b) Second claimant for the SAME `postgres` entrypoint — must be REJECTED.
+  #      depends_on makes pg-primary the deterministic incumbent.
+  pg-extra:
+    image: postgres:16-alpine
+    container_name: pg-extra
+    restart: unless-stopped
+    depends_on:
+      - pg-primary
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.pgextra.entrypoints=postgres
+      - traefik.tcp.routers.pgextra.rule=HostSNI(`*`)
+      - traefik.tcp.services.pgextra.loadbalancer.server.port=5432
