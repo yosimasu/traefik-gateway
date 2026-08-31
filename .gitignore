@@ -1,0 +1,3 @@
+# mkcert-generated cert + private key are per-machine and secret — never commit.
+# Regenerate with `make init` (or `make cert`).
+certs/*.pem

@@ -1,0 +1,32 @@
+# Catch-All fallback for HTTP/HTTPS: when no container claims a *.lvh.me host
+# (service not started, or typo'd subdomain), return 502 Bad Gateway instead of
+# Traefik's default 404 — signalling "this gateway exists, the backend is down".
+#
+# How it works: this router matches every *.lvh.me on websecure at the LOWEST
+# priority (1). Docker-provider routers default to priority = rule length, far
+# above 1, so a real running service always wins. The unavailable-service points
+# at 127.0.0.1:1 (a closed port on Traefik's own loopback); the dial fails fast
+# and Traefik surfaces 502.
+#
+# No TCP catch-all: for the DB entrypoints, when no router matches Traefik just
+# accepts then immediately closes the connection (psql/redis-cli report the
+# server closed the connection), which is already the behaviour we want. Adding
+# a TLS-bearing TCP catch-all would instead make MySQL — which never sends the
+# first packet — hang until read-timeout even when the backend is healthy.
+#
+# Only websecure is listed: the web (:80) entrypoint globally redirects to
+# websecure, so it never serves content of its own.
+http:
+  routers:
+    catchall:
+      rule: "HostRegexp(`^.+\\.lvh\\.me$`)"   # Traefik v3 syntax (plain Go regexp)
+      entryPoints:
+        - websecure
+      service: unavailable-service
+      priority: 1
+      tls: {}
+  services:
+    unavailable-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:1"

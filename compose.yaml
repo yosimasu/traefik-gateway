@@ -1,0 +1,99 @@
+# Local Traefik reverse proxy for devsy / devpod workspaces, with local HTTPS.
+#
+# Routes *.lvh.me (resolves to 127.0.0.1) to workspace containers by Host header,
+# so services need NO published host ports. Only Traefik publishes :80/:443.
+#
+# TLS: a mkcert-issued wildcard cert for *.lvh.me is served as the default cert
+# (see ./dynamic/tls.yaml + ./certs). Run `mkcert -install` once so your browser
+# trusts the local CA (Let's Encrypt cannot issue lvh.me — you don't own it).
+#
+# Opt-in is the STANDARD Traefik gate: a service must set traefik.enable=true,
+# and for HTTPS also entrypoints=websecure + tls=true, e.g.:
+#     labels:
+#       - traefik.enable=true
+#       - traefik.http.routers.redmine.rule=Host(`redmine.lvh.me`)
+#       - traefik.http.routers.redmine.entrypoints=websecure
+#       - traefik.http.routers.redmine.tls=true
+#       - traefik.http.services.redmine.loadbalancer.server.port=3000
+#
+# Databases go over plain TCP on the matching entrypoint (postgres/mysql/redis/
+# mongodb). Use HostSNI(`*`) — one DB instance per port, no TLS at the gateway
+# (backend stays plaintext; clients connect to localhost:<port> normally):
+#     labels:
+#       - traefik.enable=true
+#       - traefik.tcp.routers.pg.entrypoints=postgres
+#       - traefik.tcp.routers.pg.rule=HostSNI(`*`)
+#       - traefik.tcp.services.pg.loadbalancer.server.port=5432
+#
+# traefik.* labels are inert on providers without Traefik (AWS) -> portable.
+#
+# Bring up:  docker network create traefik-gateway-net   # once
+#            docker compose -f ~/.traefik-gateway/compose.yaml up -d
+# Dashboard: http://localhost:8080
+
+services:
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # redirect all plain HTTP to HTTPS
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # TCP entrypoints for databases: a DB container reachable on a shared host
+      # port without publishing its own. One instance per entrypoint — Traefik
+      # CANNOT multiplex several Postgres/MySQL on one port by hostname (they use
+      # STARTTLS / server-speaks-first, so there is no TLS SNI to route on).
+      - --entrypoints.postgres.address=:5432
+      - --entrypoints.mysql.address=:3306
+      - --entrypoints.redis.address=:6379
+      - --entrypoints.mongodb.address=:27017
+      - --providers.docker=true
+      # opt-in only: a service must set traefik.enable=true to be routed
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=traefik-gateway-net
+      # fallback host when a service enables Traefik but sets no explicit rule
+      - --providers.docker.defaultRule=Host(`{{ index .Labels "com.docker.compose.service" }}-{{ index .Labels "com.docker.compose.project" }}.lvh.me`)
+      # file provider serves the mkcert wildcard cert (dynamic/tls.yaml)
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+      - --api.dashboard=true
+      - --api.insecure=true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+      - "5432:5432"    # PostgreSQL
+      - "3306:3306"    # MySQL / MariaDB
+      - "6379:6379"    # Redis
+      - "27017:27017"  # MongoDB
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./certs:/certs:ro
+      - ./dynamic:/dynamic:ro
+    networks:
+      - traefik-gateway-net
+
+  # Watches Docker and auto-attaches any traefik.enable=true container to the
+  # traefik-gateway-net network, so Traefik can reach it by container name without any
+  # edit to the workspace's compose networks.
+  netconnect:
+    image: docker:cli
+    restart: unless-stopped
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        connect() { docker network connect traefik-gateway-net "$$1" 2>/dev/null || true; }
+        docker ps --filter label=traefik.enable=true -q | while read id; do connect "$$id"; done
+        docker events --filter event=start --filter label=traefik.enable=true \
+          --format '{{.Actor.Attributes.name}}' | while read n; do connect "$$n"; done
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-gateway-net
+
+networks:
+  traefik-gateway-net:
+    external: true

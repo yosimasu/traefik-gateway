@@ -1,0 +1,13 @@
+# mkcert-issued wildcard cert for *.lvh.me, served as the default certificate
+# for every HTTPS request Traefik handles. Regenerate with:
+#   mkcert -cert-file ~/.traefik-gateway/certs/lvh.me.pem \
+#          -key-file  ~/.traefik-gateway/certs/lvh.me-key.pem "*.lvh.me" "lvh.me"
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/lvh.me.pem
+        keyFile: /certs/lvh.me-key.pem
+  certificates:
+    - certFile: /certs/lvh.me.pem
+      keyFile: /certs/lvh.me-key.pem
