@@ -47,14 +47,17 @@ the extra is refused (never attached, incumbent never evicted).
 cd ~/.traefik-gateway && make check
 ```
 
-Expect exactly one holder:
+Expect exactly one holder. `DIR` is the compose directory of the container
+holding each entrypoint — `cd` there to `docker compose stop` it or fix its
+labels:
 
 ```
 DB entrypoint export 狀態 (network: traefik-gateway-net):
-  postgres  pg-primary
-  mysql     -
-  redis     -
-  mongodb   -
+  ENTRYPOINT  CONTAINER            DIR
+  postgres    pg-primary           /path/to/traefik-gateway/examples/verify
+  mysql       -                    -
+  redis       -                    -
+  mongodb     -                    -
 ```
 
 See the refusal warning in the sidecar log:

@@ -36,6 +36,17 @@ attached() {
   [ -n "$(docker inspect "$1" --format "{{if index .NetworkSettings.Networks \"$NET\"}}1{{end}}" 2>/dev/null)" ]
 }
 
+# host directory of the compose project that owns $1 (so you can cd there to
+# stop/adjust it). Falls back to the config file's dir, then "(non-compose)".
+workdir_of() {
+  d="$(docker inspect "$1" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
+  if [ -z "$d" ]; then
+    cf="$(docker inspect "$1" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null)"
+    [ -n "$cf" ] && d="$(dirname "${cf%%,*}")"
+  fi
+  [ -n "$d" ] && echo "$d" || echo "(non-compose)"
+}
+
 # name of an already-attached container holding entrypoint $1 (excluding $2)
 holder_of() {
   ep="$1"; excl="$2"
@@ -75,9 +86,11 @@ admit() {
   docker network connect "$NET" "$n" 2>/dev/null || true
 }
 
-# one-shot status report
+# one-shot status report — shows the holder container and its compose directory
+# (cd there to stop or fix the labels).
 report() {
   echo "DB entrypoint export 狀態 (network: $NET):"
+  echo "  ENTRYPOINT  CONTAINER            DIR"
   for e in $DB_EPS; do
     holders=""
     for n in $(docker ps --filter label=traefik.enable=true --format '{{.Names}}'); do
@@ -88,11 +101,14 @@ report() {
     # shellcheck disable=SC2086
     set -- $holders
     if [ "$#" -eq 0 ]; then
-      printf '  %-9s -\n' "$e"
+      printf '  %-11s %-20s %s\n' "$e" "-" "-"
     elif [ "$#" -eq 1 ]; then
-      printf '  %-9s %s\n' "$e" "$1"
+      printf '  %-11s %-20s %s\n' "$e" "$1" "$(workdir_of "$1")"
     else
-      printf '  %-9s ⚠️  衝突: %s\n' "$e" "$*"
+      printf '  %-11s ⚠️  衝突:\n' "$e"
+      for n in "$@"; do
+        printf '  %-11s   %-18s %s\n' "" "$n" "$(workdir_of "$n")"
+      done
     fi
   done
 }
