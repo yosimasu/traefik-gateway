@@ -99,12 +99,14 @@ black hole). Network attachment alone cannot decide the winner.
 `make check` reports this honestly: one claimant → the deterministic target;
 two or more (unpinned) → `路由不確定`, telling you to pin one.
 
-**Pinning** makes it deterministic. `make pin DB=postgres` lists the candidates,
-you pick one, and it writes `dynamic/pin-postgres.yaml` — a high-priority
+**Pinning** makes it deterministic. `make pin` first lists the DB types that have
+candidates, then the containers for the one you pick (or skip the first step with
+`make pin DB=postgres`). It writes `dynamic/pin-postgres.yaml` — a high-priority
 (`9999`) file-provider router that wins over the docker routers — and records it
 in `netconnect/pins.conf` so the sidecar keeps that container attached. Connect
-as usual (`db.lvh.me:5432`) and you always reach the pinned instance. `make unpin
-DB=postgres` removes it. Pins are per-machine (gitignored).
+as usual (`db.lvh.me:5432`) and you always reach the pinned instance. `make unpin`
+(it lists the pinned DBs to choose from) removes it. Pins are per-machine
+(gitignored).
 
 ## Make targets
 

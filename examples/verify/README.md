@@ -70,7 +70,7 @@ for i in 1 2 3; do docker run --rm --network host postgres:16-alpine \
 Now **pin** one and it becomes deterministic:
 
 ```bash
-make pin DB=postgres          # pick 1 or 2 from the list (q to abort)
+make pin                      # pick the DB (postgres), then pick 1 or 2 (q aborts)
 make check                    # postgres  <chosen>  ...  (pinned)
 ```
 

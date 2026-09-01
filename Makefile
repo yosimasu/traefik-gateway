@@ -6,7 +6,7 @@ COMPOSE := docker compose
 NETWORK := traefik-gateway-net
 CERT    := certs/lvh.me.pem
 KEY     := certs/lvh.me-key.pem
-DB      ?= postgres
+DB      ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help check-docker check-mkcert init net cert up down restart logs check pin unpin clean
@@ -18,7 +18,7 @@ help:
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-9s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "  pin/unpin take DB=<postgres|mysql|redis|mongodb> (default postgres)."
+	@echo "  pin/unpin 不帶參數會先讓你選 DB；也可 DB=<postgres|mysql|redis|mongodb> 直接指定。"
 
 # Preflight: refuse to run until the required tools are installed, with a hint.
 check-docker:
@@ -75,11 +75,11 @@ check: check-docker ## 顯示每個 DB entrypoint 路由到哪顆容器（含歧
 
 # Pin a DB entrypoint to a specific container (overrides reject-extras). Both
 # targets take an optional DB=<postgres|mysql|redis|mongodb> (default postgres).
-pin: check-docker ## 互動式把某個 DB entrypoint 釘到指定容器
-	@sh netconnect/pin-db.sh $(DB)
+pin: check-docker ## 互動式指定某個 DB entrypoint 連到哪顆容器（先選 DB 再選 instance）
+	@sh netconnect/pin-db.sh pin $(DB)
 
-unpin: check-docker ## 移除該 pin
-	@sh netconnect/pin-db.sh $(DB) unpin
+unpin: check-docker ## 移除 pin（先選要解除的 DB）
+	@sh netconnect/pin-db.sh unpin $(DB)
 
 clean: ## 刪除產生的憑證（保留已信任的 CA）
 	rm -f certs/*.pem
