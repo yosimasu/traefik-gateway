@@ -6,8 +6,8 @@
 # two things end to end:
 #
 #   1. HTTPS host routing   -> https://demo.lvh.me  reaches demo-web
-#   2. reject-extras         -> pg-extra is refused because pg-primary already
-#                               holds the `postgres` TCP entrypoint
+#   2. DB entrypoint pinning -> two containers claim `postgres`, so routing is
+#                               ambiguous until you `make pin DB=postgres` one
 #
 # Run from this directory:
 #   docker compose up -d
@@ -27,7 +27,7 @@ services:
       - traefik.http.routers.demoweb.tls=true
       - traefik.http.services.demoweb.loadbalancer.server.port=80
 
-  # (2a) Incumbent DB — claims the `postgres` entrypoint first and wins it.
+  # (2a) One postgres claiming the `postgres` entrypoint.
   pg-primary:
     image: postgres:16-alpine
     container_name: pg-primary
@@ -40,14 +40,12 @@ services:
       - traefik.tcp.routers.pgprimary.rule=HostSNI(`*`)
       - traefik.tcp.services.pgprimary.loadbalancer.server.port=5432
 
-  # (2b) Second claimant for the SAME `postgres` entrypoint — must be REJECTED.
-  #      depends_on makes pg-primary the deterministic incumbent.
+  # (2b) A SECOND claimant for the same `postgres` entrypoint. With two claimants
+  #      Traefik routes non-deterministically until you pin one (`make pin`).
   pg-extra:
     image: postgres:16-alpine
     container_name: pg-extra
     restart: unless-stopped
-    depends_on:
-      - pg-primary
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
     labels:

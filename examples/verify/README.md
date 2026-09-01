@@ -58,10 +58,12 @@ DB entrypoint 路由狀態 (network: traefik-gateway-net):
   ...
 ```
 
-Confirm the ambiguity — repeated connects may time out (a black-hole router):
+Confirm the ambiguity — repeated connects may time out (a black-hole router).
+No local `psql` needed; borrow one in a container on the host network:
 
 ```bash
-for i in 1 2 3; do psql "postgresql://postgres@db.lvh.me:5432/postgres?connect_timeout=4" \
+for i in 1 2 3; do docker run --rm --network host postgres:16-alpine \
+  psql "postgresql://postgres@db.lvh.me:5432/postgres?connect_timeout=4" \
   -tAc 'select inet_server_addr();'; done
 ```
 
