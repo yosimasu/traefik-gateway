@@ -136,7 +136,8 @@ as usual (`db.lvh.me:5432`) and you always reach the pinned instance. `make unpi
 ├── netconnect/
 │   ├── admission.sh       # auto-attach + reject-extras + pin awareness
 │   ├── pin-db.sh          # `make pin` / `make unpin` implementation
-│   └── pins.conf          # pin registry (which container each DB port is pinned to)
+│   ├── pins.conf.example  # versioned template for the pin registry
+│   └── pins.conf          # pin registry, per-machine (gitignored; seeded from .example)
 └── certs/                 # mkcert output (gitignored)
 ```
 

@@ -5,3 +5,7 @@ certs/*.pem
 # Generated DB pins are per-machine (reference local container names).
 # Created/removed by `make pin` / `make unpin`.
 dynamic/pin-*.yaml
+
+# The pins registry is per-machine too (same reason). Track pins.conf.example
+# instead; `make init`/`make up` seed the live file from it.
+netconnect/pins.conf

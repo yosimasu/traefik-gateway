@@ -6,3 +6,7 @@
 # (high-priority Traefik file router). Both are written by `make pin` and removed
 # by `make unpin` — edit by hand only if you know why, then `make restart`.
 # No pins here == plain reject-extras (first claimant of a port wins).
+#
+# This .example is the versioned template. The live pins.conf is per-machine
+# (references local container names) and is gitignored; `make init`/`make up`
+# seed it from this file, and `make pin`/`make unpin` maintain it.

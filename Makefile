@@ -9,7 +9,7 @@ KEY     := certs/lvh.me-key.pem
 DB      ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help check-docker check-mkcert init net cert up down restart logs check pin unpin clean
+.PHONY: help check-docker check-mkcert init net cert pins up down restart logs check pin unpin clean
 
 # Self-documenting: lists every target that carries a `## ` description, in file
 # order. `make` with no target lands here.
@@ -39,8 +39,15 @@ check-mkcert:
 
 # First-run setup: trust the mkcert CA, issue the *.lvh.me wildcard cert, and
 # create the external proxy network. Safe to re-run (each step is idempotent).
-init: check-docker check-mkcert net cert ## 首次設定：信任 CA、簽發憑證、建立網路（可重複執行）
+init: check-docker check-mkcert net cert pins ## 首次設定：信任 CA、簽發憑證、建立網路（可重複執行）
 	@echo "Ready. Run 'make up' to start the gateway."
+
+# The live pins.conf is per-machine (gitignored); seed it from the versioned
+# template on first run so the sidecar always has a file to read.
+pins:
+	@[ -f netconnect/pins.conf ] || { \
+		cp netconnect/pins.conf.example netconnect/pins.conf; \
+		echo "seeded netconnect/pins.conf from .example"; }
 
 # The compose file declares traefik-gateway-net as external, so it must exist first.
 net: check-docker
@@ -54,14 +61,14 @@ cert: check-mkcert
 	mkcert -cert-file $(CERT) -key-file $(KEY) "*.lvh.me" "lvh.me"
 	@echo "Wildcard cert for *.lvh.me generated."
 
-up: net ## 啟動 gateway
+up: net pins ## 啟動 gateway
 	$(COMPOSE) up -d
 
 down: check-docker ## 停止 gateway
 	$(COMPOSE) down
 
 # --force-recreate picks up entrypoint/command changes (a plain 'up' won't).
-restart: net ## 套用設定變更（重建 traefik/netconnect 容器）
+restart: net pins ## 套用設定變更（重建 traefik/netconnect 容器）
 	$(COMPOSE) up -d --force-recreate
 
 logs: check-docker ## 跟看 log（觀察 sidecar 接入容器）
