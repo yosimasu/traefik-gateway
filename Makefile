@@ -7,14 +7,17 @@
 #   make restart   # apply config changes (recreates the traefik container)
 #   make logs      # follow logs (watch the netconnect sidecar attach containers)
 #   make check     # show which container exports each DB entrypoint (+ conflicts)
+#   make pin       # interactively pin a DB entrypoint to a chosen container
+#   make unpin     # remove that pin (default DB=postgres; override e.g. DB=mysql)
 #   make clean     # remove the generated certs (keeps the trusted CA)
 
 COMPOSE := docker compose
 NETWORK := traefik-gateway-net
 CERT    := certs/lvh.me.pem
 KEY     := certs/lvh.me-key.pem
+DB      ?= postgres
 
-.PHONY: check-docker check-mkcert init net cert up down restart logs check clean
+.PHONY: check-docker check-mkcert init net cert up down restart logs check pin unpin clean
 
 # Preflight: refuse to run until the required tools are installed, with a hint.
 check-docker:
@@ -68,6 +71,14 @@ check: check-docker
 	@cid=$$($(COMPOSE) ps -q netconnect 2>/dev/null); \
 	if [ -n "$$cid" ]; then docker exec "$$cid" sh /netconnect/admission.sh check; \
 	else echo "netconnect 未運行，先 make up"; fi
+
+# Pin a DB entrypoint to a specific container (overrides reject-extras). Both
+# targets take an optional DB=<postgres|mysql|redis|mongodb> (default postgres).
+pin: check-docker
+	@sh netconnect/pin-db.sh $(DB)
+
+unpin: check-docker
+	@sh netconnect/pin-db.sh $(DB) unpin
 
 clean:
 	rm -f certs/*.pem

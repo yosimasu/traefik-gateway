@@ -38,54 +38,44 @@ Sanity contrast — an unrouted host returns the 502 fallback, not a hang or 404
 curl -k -o /dev/null -w '%{http_code}\n' https://nope.lvh.me   # -> 502
 ```
 
-## 2. reject-extras — one exporter per DB entrypoint
+## 2. Two claimants are ambiguous — pin one to make it deterministic
 
-Both `pg-primary` and `pg-extra` claim `entrypoints=postgres`. The incumbent wins;
-the extra is refused (never attached, incumbent never evicted).
+Both `pg-primary` and `pg-extra` claim `entrypoints=postgres`. Traefik builds a
+router from each container's labels regardless of network membership, so with two
+claimants routing is **non-deterministic** (Traefik may even pick an unreachable
+one). `make check` reports this honestly rather than pretending one "holds" it:
 
 ```bash
 cd ~/.traefik-gateway && make check
 ```
 
-Expect exactly one holder. `DIR` is the compose directory of the container
-holding each entrypoint — `cd` there to `docker compose stop` it or fix its
-labels:
-
 ```
-DB entrypoint export 狀態 (network: traefik-gateway-net):
-  ENTRYPOINT  CONTAINER            DIR
-  postgres    pg-primary           /path/to/traefik-gateway/examples/verify
-  mysql       -                    -
-  redis       -                    -
-  mongodb     -                    -
+DB entrypoint 路由狀態 (network: traefik-gateway-net):
+  ENTRYPOINT  TARGET               DIR / 說明
+  postgres    ⚠️ 2 claimant        路由不確定，請 make pin DB=postgres 指定一顆：
+                pg-extra           /path/to/examples/verify
+                pg-primary         /path/to/examples/verify
+  ...
 ```
 
-See the refusal warning in the sidecar log:
+Confirm the ambiguity — repeated connects may time out (a black-hole router):
 
 ```bash
-make logs   # or: docker compose -f ~/.traefik-gateway/compose.yaml logs netconnect
+for i in 1 2 3; do psql "postgresql://postgres@db.lvh.me:5432/postgres?connect_timeout=4" \
+  -tAc 'select inet_server_addr();'; done
 ```
 
-```
-⚠️  [postgres] entrypoint 已被 'pg-primary' 佔用，拒絕接入 'pg-extra'。
-```
-
-Confirm the incumbent actually routes (optional, needs a psql client):
+Now **pin** one and it becomes deterministic:
 
 ```bash
-psql -h localhost -p 5432 -U postgres -c 'select 1;'   # reaches pg-primary
+make pin DB=postgres          # pick 1 or 2 from the list (q to abort)
+make check                    # postgres  <chosen>  ...  (pinned)
 ```
 
-### Prove self-heal (optional)
-
-Disable the incumbent and restart the extra — the extra now gets the entrypoint:
-
-```bash
-cd examples/verify
-docker compose stop pg-primary
-docker compose restart pg-extra
-cd ~/.traefik-gateway && make check    # postgres -> pg-extra
-```
+`make pin` writes a high-priority `dynamic/pin-postgres.yaml` (→ your choice) that
+wins over both docker routers, and keeps that container attached. Re-run the loop
+above: 3/3 now reach the pinned instance. Switch any time with `make pin` again;
+`make unpin DB=postgres` returns to the ambiguous state.
 
 ## Tear down
 

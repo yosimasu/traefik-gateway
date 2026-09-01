@@ -2,20 +2,31 @@
 # netconnect admission controller (runs in the docker:cli sidecar).
 #
 # Auto-attaches every traefik.enable=true container to the gateway network so
-# Traefik can reach it by name — BUT enforces "at most one exporter per DB
-# entrypoint" for postgres/mysql/redis/mongodb. Those TCP entrypoints route with
-# HostSNI(`*`), so only one backend per port is meaningful.
+# Traefik can reach it by name. For the DB TCP entrypoints (postgres/mysql/redis/
+# mongodb) only ONE backend per port is meaningful, so it also nudges toward
+# one-exporter-per-entrypoint.
 #
-# Policy: reject-extras. The incumbent is never evicted; a second container
-# claiming an already-taken DB entrypoint is refused (not attached) and a loud
-# warning tells the user to keep traefik.enable=true on only one and disable the
-# rest. Self-heals on the next start/stop once labels are fixed.
+# IMPORTANT — what network attachment can and cannot do:
+#   Traefik's docker provider builds a TCP router from a container's LABELS
+#   regardless of network membership; attachment only decides which IP it uses.
+#   So two containers both labelled for `postgres` yield two HostSNI(`*`) routers
+#   of equal priority, and Traefik picks between them non-deterministically (one
+#   may even point at an unreachable IP). Network gating alone therefore CANNOT
+#   pin routing to a chosen backend.
 #
-# `admission.sh check` prints a one-shot status report (used by `make check`).
+# Deterministic pinning is done by the file provider instead: `make pin` writes
+# dynamic/pin-<ep>.yaml with a high-priority router → the chosen container, which
+# wins over every docker router. This controller's only pin duty is to keep the
+# pinned container ATTACHED (so that file router's backend is reachable) and to
+# never evict it. Pins are recorded in pins.conf (read here; written by make pin).
+#
+# Subcommands: `admission.sh check` prints a status report (make check);
+#              `admission.sh reconcile` re-attaches pinned + pending containers.
 set -u
 
 NET=traefik-gateway-net
 DB_EPS="postgres mysql redis mongodb"
+PINS="$(dirname "$0")/pins.conf"   # lines: <entrypoint>=<container-name>
 
 # entrypoints claimed by a container's TCP routers (space-separated)
 claimed_eps() {
@@ -36,8 +47,7 @@ attached() {
   [ -n "$(docker inspect "$1" --format "{{if index .NetworkSettings.Networks \"$NET\"}}1{{end}}" 2>/dev/null)" ]
 }
 
-# host directory of the compose project that owns $1 (so you can cd there to
-# stop/adjust it). Falls back to the config file's dir, then "(non-compose)".
+# host directory of the compose project that owns $1 (cd there to stop/adjust it)
 workdir_of() {
   d="$(docker inspect "$1" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
   if [ -z "$d" ]; then
@@ -47,28 +57,43 @@ workdir_of() {
   [ -n "$d" ] && echo "$d" || echo "(non-compose)"
 }
 
-# name of an already-attached container holding entrypoint $1 (excluding $2)
+# container pinned to entrypoint $1 (empty if none). Last matching line wins.
+pinned_for() {
+  [ -f "$PINS" ] || return 0
+  grep -E "^[[:space:]]*$1[[:space:]]*=" "$PINS" 2>/dev/null \
+    | grep -vE '^[[:space:]]*#' \
+    | sed -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//; s/[[:space:]]*\$//" \
+    | tail -n1
+}
+
+# running containers (enable=true) that claim entrypoint $1
+claimants_of() {
+  for n in $(docker ps --filter label=traefik.enable=true --format '{{.Names}}'); do
+    for e in $(db_eps_of "$n"); do
+      [ "$e" = "$1" ] && { echo "$n"; break; }
+    done
+  done
+}
+
+# name of an already-attached claimant of entrypoint $1 (excluding $2)
 holder_of() {
   ep="$1"; excl="$2"
-  docker ps --filter label=traefik.enable=true --format '{{.Names}}' | while read n; do
+  for n in $(claimants_of "$ep"); do
     [ "$n" = "$excl" ] && continue
-    attached "$n" || continue
-    for e in $(db_eps_of "$n"); do
-      if [ "$e" = "$ep" ]; then echo "$n"; break; fi
-    done
-  done | head -n1
+    attached "$n" && { echo "$n"; return; }
+  done
 }
 
 warn_conflict() {   # $1=ep  $2=incumbent  $3=rejected
   echo "────────────────────────────────────────────────────────────"
   echo "⚠️  [$1] entrypoint 已被 '$2' 佔用，拒絕接入 '$3'。"
   echo "    postgres/mysql/redis/mongodb 每個 entrypoint 只能 export 一顆。"
-  echo "    請保留其中一顆 traefik.enable=true，另一顆改為 false，"
-  echo "    再重建該容器（改對應專案的 compose）。"
+  echo "    保留一顆、其餘 enable=false 再重建；或用 'make pin DB=$1' 指定一顆。"
   echo "────────────────────────────────────────────────────────────"
 }
 
-# attach one container, honouring the at-most-one-per-DB-entrypoint rule
+# attach one container: pinned containers are always admitted; otherwise the
+# usual reject-extras (first claimant of a DB entrypoint wins the attach).
 admit() {
   n="$1"
   dbeps="$(db_eps_of "$n")"
@@ -77,35 +102,59 @@ admit() {
     return
   fi
   for e in $dbeps; do
+    if [ "$(pinned_for "$e")" = "$n" ]; then
+      docker network connect "$NET" "$n" 2>/dev/null || true   # pinned: always reachable
+      return
+    fi
+  done
+  for e in $dbeps; do
     h="$(holder_of "$e" "$n")"
     if [ -n "$h" ]; then
       warn_conflict "$e" "$h" "$n"
-      return   # reject the whole container; do not attach
+      return
     fi
   done
   docker network connect "$NET" "$n" 2>/dev/null || true
 }
 
-# one-shot status report — shows the holder container and its compose directory
-# (cd there to stop or fix the labels).
-report() {
-  echo "DB entrypoint export 狀態 (network: $NET):"
-  echo "  ENTRYPOINT  CONTAINER            DIR"
+# make sure every pinned container is attached (its file router needs it routable)
+attach_pins() {
+  [ -f "$PINS" ] || return 0
   for e in $DB_EPS; do
-    holders=""
-    for n in $(docker ps --filter label=traefik.enable=true --format '{{.Names}}'); do
-      for x in $(db_eps_of "$n"); do
-        if [ "$x" = "$e" ] && attached "$n"; then holders="$holders $n"; fi
-      done
-    done
-    # shellcheck disable=SC2086
-    set -- $holders
-    if [ "$#" -eq 0 ]; then
+    p="$(pinned_for "$e")"
+    [ -n "$p" ] || continue
+    if docker ps --format '{{.Names}}' | grep -qx "$p"; then
+      attached "$p" || { echo "  pin[$e]: 接入 '$p'"; docker network connect "$NET" "$p" 2>/dev/null || true; }
+    else
+      echo "  pin[$e]: ⚠️  指定的 '$p' 未在運行"
+    fi
+  done
+}
+
+# one-shot status report — reports what ACTUALLY determines routing, not just who
+# is attached. A pin is authoritative; a lone claimant routes deterministically;
+# multiple unpinned claimants mean Traefik picks non-deterministically.
+report() {
+  echo "DB entrypoint 路由狀態 (network: $NET):"
+  echo "  ENTRYPOINT  TARGET               DIR / 說明"
+  for e in $DB_EPS; do
+    p="$(pinned_for "$e")"
+    # shellcheck disable=SC2046
+    set -- $(claimants_of "$e")
+    if [ -n "$p" ]; then
+      if docker ps --format '{{.Names}}' | grep -qx "$p"; then
+        note="$(workdir_of "$p")"; attached "$p" || note="$note  ⚠️未接上"
+        printf '  %-11s %-20s %s  (pinned)\n' "$e" "$p" "$note"
+      else
+        printf '  %-11s %-20s %s\n' "$e" "-" "(pinned→$p 未運行)"
+      fi
+    elif [ "$#" -eq 0 ]; then
       printf '  %-11s %-20s %s\n' "$e" "-" "-"
     elif [ "$#" -eq 1 ]; then
-      printf '  %-11s %-20s %s\n' "$e" "$1" "$(workdir_of "$1")"
+      note="$(workdir_of "$1")"; attached "$1" || note="$note  ⚠️未接上(黑洞)"
+      printf '  %-11s %-20s %s\n' "$e" "$1" "$note"
     else
-      printf '  %-11s ⚠️  衝突:\n' "$e"
+      printf '  %-11s %-20s %s\n' "$e" "⚠️ $# claimant" "路由不確定，請 make pin DB=$e 指定一顆："
       for n in "$@"; do
         printf '  %-11s   %-18s %s\n' "" "$n" "$(workdir_of "$n")"
       done
@@ -113,24 +162,29 @@ report() {
   done
 }
 
-if [ "${1:-}" = "check" ]; then
-  report
-  exit 0
-fi
+# apply pins, then attach any still-unattached claimants
+reconcile() {
+  attach_pins
+  for n in $(docker ps --filter label=traefik.enable=true --format '{{.Names}}'); do
+    attached "$n" && continue
+    admit "$n"
+  done
+}
+
+case "${1:-}" in
+  check)     report; exit 0 ;;
+  reconcile) reconcile; exit 0 ;;
+esac
 
 # ---- daemon ----
 echo "netconnect admission controller up — reject-extras for: $DB_EPS"
 
-# reconcile existing containers (leave already-attached incumbents untouched)
-for n in $(docker ps --filter label=traefik.enable=true --format '{{.Names}}'); do
-  attached "$n" && continue
-  admit "$n"
-done
+reconcile
 
-# surface any pre-existing duplicates (not evicted, per reject-extras)
+# surface any non-deterministic (unpinned, multi-claimant) entrypoints
 r="$(report)"
-if echo "$r" | grep -q '衝突'; then
-  echo "$r" | grep '衝突'
+if echo "$r" | grep -q '路由不確定'; then
+  echo "$r" | grep -A1 '路由不確定'
 fi
 
 # react to new container starts

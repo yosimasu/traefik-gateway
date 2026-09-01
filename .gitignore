@@ -1,3 +1,7 @@
 # mkcert-generated cert + private key are per-machine and secret — never commit.
 # Regenerate with `make init` (or `make cert`).
 certs/*.pem
+
+# Generated DB pins are per-machine (reference local container names).
+# Created/removed by `make pin` / `make unpin`.
+dynamic/pin-*.yaml

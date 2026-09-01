@@ -87,6 +87,25 @@ The 502 (instead of Traefik's default 404) comes from a lowest-priority
 catch-all router in `dynamic/fallback.yaml` pointing at a dead-end, so a typo'd
 or not-yet-started `*.lvh.me` reads as "backend down", not "unknown host".
 
+### One backend per DB port — and pinning which one
+
+A DB entrypoint (`postgres`/`mysql`/`redis`/`mongodb`) routes with `HostSNI(\`*\`)`,
+so only one backend per port is meaningful. Traefik's docker provider builds a
+router from a container's **labels**, independent of network membership — so if
+two containers both carry `entrypoints=postgres`, Traefik sees two equal routers
+and picks between them **non-deterministically** (one may even be an unreachable
+black hole). Network attachment alone cannot decide the winner.
+
+`make check` reports this honestly: one claimant → the deterministic target;
+two or more (unpinned) → `路由不確定`, telling you to pin one.
+
+**Pinning** makes it deterministic. `make pin DB=postgres` lists the candidates,
+you pick one, and it writes `dynamic/pin-postgres.yaml` — a high-priority
+(`9999`) file-provider router that wins over the docker routers — and records it
+in `netconnect/pins.conf` so the sidecar keeps that container attached. Connect
+as usual (`db.lvh.me:5432`) and you always reach the pinned instance. `make unpin
+DB=postgres` removes it. Pins are per-machine (gitignored).
+
 ## Make targets
 
 | Target | Does |
@@ -96,6 +115,9 @@ or not-yet-started `*.lvh.me` reads as "backend down", not "unknown host".
 | `make down` | stop it |
 | `make restart` | recreate the traefik container (needed after command/entrypoint changes) |
 | `make logs` | follow logs (watch the sidecar attach containers) |
+| `make check` | report which container each DB entrypoint routes to (+ ambiguity) |
+| `make pin` | interactively pin a DB entrypoint to a chosen container (`DB=postgres` by default) |
+| `make unpin` | remove that pin (e.g. `make unpin DB=mysql`) |
 | `make clean` | remove the generated certs (keeps the trusted CA) |
 
 ## Layout
@@ -106,7 +128,12 @@ or not-yet-started `*.lvh.me` reads as "backend down", not "unknown host".
 ├── Makefile               # lifecycle + preflight checks
 ├── dynamic/
 │   ├── tls.yaml           # mkcert wildcard as the default cert
-│   └── fallback.yaml      # HTTP 502 catch-all
+│   ├── fallback.yaml      # HTTP 502 catch-all
+│   └── pin-*.yaml         # generated DB pins (gitignored)
+├── netconnect/
+│   ├── admission.sh       # auto-attach + reject-extras + pin awareness
+│   ├── pin-db.sh          # `make pin` / `make unpin` implementation
+│   └── pins.conf          # pin registry (which container each DB port is pinned to)
 └── certs/                 # mkcert output (gitignored)
 ```
 
