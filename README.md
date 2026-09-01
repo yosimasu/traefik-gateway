@@ -110,6 +110,7 @@ DB=postgres` removes it. Pins are per-machine (gitignored).
 
 | Target | Does |
 |---|---|
+| `make` / `make help` | list all targets (the default target) |
 | `make init` | first-run: trust CA, issue cert, create `traefik-gateway-net` |
 | `make up` | start the gateway |
 | `make down` | stop it |

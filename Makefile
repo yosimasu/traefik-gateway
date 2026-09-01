@@ -1,15 +1,6 @@
 # Local Traefik gateway — one-command lifecycle.
 # Run every target from ~/.traefik-gateway (paths in compose.yaml are relative).
-#
-#   make init      # first time on a machine: trust CA, issue cert, create network
-#   make up        # start the gateway
-#   make down      # stop it
-#   make restart   # apply config changes (recreates the traefik container)
-#   make logs      # follow logs (watch the netconnect sidecar attach containers)
-#   make check     # show which container exports each DB entrypoint (+ conflicts)
-#   make pin       # interactively pin a DB entrypoint to a chosen container
-#   make unpin     # remove that pin (default DB=postgres; override e.g. DB=mysql)
-#   make clean     # remove the generated certs (keeps the trusted CA)
+# Run `make` (or `make help`) to list the targets.
 
 COMPOSE := docker compose
 NETWORK := traefik-gateway-net
@@ -17,7 +8,17 @@ CERT    := certs/lvh.me.pem
 KEY     := certs/lvh.me-key.pem
 DB      ?= postgres
 
-.PHONY: check-docker check-mkcert init net cert up down restart logs check pin unpin clean
+.DEFAULT_GOAL := help
+.PHONY: help check-docker check-mkcert init net cert up down restart logs check pin unpin clean
+
+# Self-documenting: lists every target that carries a `## ` description, in file
+# order. `make` with no target lands here.
+help:
+	@echo "Local Traefik gateway — targets:"
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-9s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  pin/unpin take DB=<postgres|mysql|redis|mongodb> (default postgres)."
 
 # Preflight: refuse to run until the required tools are installed, with a hint.
 check-docker:
@@ -38,7 +39,7 @@ check-mkcert:
 
 # First-run setup: trust the mkcert CA, issue the *.lvh.me wildcard cert, and
 # create the external proxy network. Safe to re-run (each step is idempotent).
-init: check-docker check-mkcert net cert
+init: check-docker check-mkcert net cert ## 首次設定：信任 CA、簽發憑證、建立網路（可重複執行）
 	@echo "Ready. Run 'make up' to start the gateway."
 
 # The compose file declares traefik-gateway-net as external, so it must exist first.
@@ -53,32 +54,32 @@ cert: check-mkcert
 	mkcert -cert-file $(CERT) -key-file $(KEY) "*.lvh.me" "lvh.me"
 	@echo "Wildcard cert for *.lvh.me generated."
 
-up: net
+up: net ## 啟動 gateway
 	$(COMPOSE) up -d
 
-down: check-docker
+down: check-docker ## 停止 gateway
 	$(COMPOSE) down
 
 # --force-recreate picks up entrypoint/command changes (a plain 'up' won't).
-restart: net
+restart: net ## 套用設定變更（重建 traefik/netconnect 容器）
 	$(COMPOSE) up -d --force-recreate
 
-logs: check-docker
+logs: check-docker ## 跟看 log（觀察 sidecar 接入容器）
 	$(COMPOSE) logs -f
 
 # Report which container currently exports each DB entrypoint (and any conflict).
-check: check-docker
+check: check-docker ## 顯示每個 DB entrypoint 路由到哪顆容器（含歧義提示）
 	@cid=$$($(COMPOSE) ps -q netconnect 2>/dev/null); \
 	if [ -n "$$cid" ]; then docker exec "$$cid" sh /netconnect/admission.sh check; \
 	else echo "netconnect 未運行，先 make up"; fi
 
 # Pin a DB entrypoint to a specific container (overrides reject-extras). Both
 # targets take an optional DB=<postgres|mysql|redis|mongodb> (default postgres).
-pin: check-docker
+pin: check-docker ## 互動式把某個 DB entrypoint 釘到指定容器
 	@sh netconnect/pin-db.sh $(DB)
 
-unpin: check-docker
+unpin: check-docker ## 移除該 pin
 	@sh netconnect/pin-db.sh $(DB) unpin
 
-clean:
+clean: ## 刪除產生的憑證（保留已信任的 CA）
 	rm -f certs/*.pem
